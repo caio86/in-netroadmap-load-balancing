@@ -10,7 +10,7 @@ from mininet.log import error, info
 from mininet.node import Switch
 
 from .config import SWITCHES, thrift_port
-from .tables import table_commands
+from .tables import LB_THRESHOLD, table_commands
 
 
 def cli_exe():
@@ -44,6 +44,23 @@ def read_counter(sw, counter, index):
     out = run_cli(sw, [f"counter_read {counter} {index}"])
     m = re.search(r"(\d+) packets", out)
     return int(m.group(1)) if m else None
+
+
+def read_counters(sw, counter, n):
+    out = run_cli(sw, [f"counter_read {counter} {i}" for i in range(n)])
+    cells = {
+        int(i): int(pkts)
+        for i, pkts in re.findall(r"\[(\d+)\]= \(\d+ bytes, (\d+) packets\)", out)
+    }
+    return [cells[i] for i in range(n)]
+
+
+def set_threshold(sw, value):
+    run_cli(sw, [f"register_write {LB_THRESHOLD} 0 {value}"])
+
+
+def reset_counter(sw, counter):
+    run_cli(sw, [f"counter_reset {counter}"])
 
 
 class P4Switch(Switch):

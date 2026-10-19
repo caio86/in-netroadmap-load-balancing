@@ -43,7 +43,7 @@ struct headers {
 }
 
 struct metadata {
-    bit<16> ecmp_select;
+    bit<16> link;
 }
 
 /* ------------------------------------------------------------------ parser */
@@ -84,6 +84,9 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
+    register<bit<8>>(1) lb_threshold;
+    counter(32, CounterType.packets) bucket_pkts;
+
     action drop() {
         mark_to_drop(standard_metadata);
     }
@@ -94,9 +97,10 @@ control MyIngress(inout headers hdr,
         hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
     }
 
-    action set_ecmp_group(bit<16> count) {
+    action set_lb_group(bit<16> count) {
+        bit<16> bucket;
         hash(
-            meta.ecmp_select,
+            bucket,
             HashAlgorithm.crc16,
             16w0,
             {
@@ -108,17 +112,26 @@ control MyIngress(inout headers hdr,
             },
             count
         );
+        bucket_pkts.count((bit<32>) bucket);
+
+        bit<8> threshold;
+        lb_threshold.read(threshold, 0);
+        if (bucket < (bit<16>) threshold) {
+            meta.link = 0;
+        } else {
+            meta.link = 1;
+        }
     }
 
     table ipv4_lpm {
         key = { hdr.ipv4.dstAddr: lpm; }
-        actions = { set_nhop; set_ecmp_group; drop; }
+        actions = { set_nhop; set_lb_group; drop; }
         size = 1024;
         default_action = drop();
     }
 
-    table ecmp_nhop {
-        key = { meta.ecmp_select: exact; }
+    table lb_nhop {
+        key = { meta.link: exact; }
         actions = { set_nhop; drop; }
         size = 64;
         default_action = drop();
@@ -128,7 +141,7 @@ control MyIngress(inout headers hdr,
     apply {
         if (hdr.ipv4.isValid() && hdr.ipv4.ttl > 1) {
             switch(ipv4_lpm.apply().action_run) {
-                set_ecmp_group: { ecmp_nhop.apply(); }
+                set_lb_group: { lb_nhop.apply(); }
             }
         } else {
             drop();
