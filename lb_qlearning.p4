@@ -43,6 +43,7 @@ struct headers {
 }
 
 struct metadata {
+    bit<16> bucket;
     bit<16> link;
 }
 
@@ -84,7 +85,7 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
-    register<bit<8>>(1) lb_threshold;
+    register<bit<8>>(4) lb_weights;
     counter(32, CounterType.packets) bucket_pkts;
 
     action drop() {
@@ -98,9 +99,9 @@ control MyIngress(inout headers hdr,
     }
 
     action set_lb_group(bit<16> count) {
-        bit<16> bucket;
+        // Set flow bucket
         hash(
-            bucket,
+            meta.bucket,
             HashAlgorithm.crc16,
             16w0,
             {
@@ -112,15 +113,7 @@ control MyIngress(inout headers hdr,
             },
             count
         );
-        bucket_pkts.count((bit<32>) bucket);
-
-        bit<8> threshold;
-        lb_threshold.read(threshold, 0);
-        if (bucket < (bit<16>) threshold) {
-            meta.link = 0;
-        } else {
-            meta.link = 1;
-        }
+        bucket_pkts.count((bit<32>) meta.bucket);
     }
 
     table ipv4_lpm {
@@ -141,7 +134,19 @@ control MyIngress(inout headers hdr,
     apply {
         if (hdr.ipv4.isValid() && hdr.ipv4.ttl > 1) {
             switch(ipv4_lpm.apply().action_run) {
-                set_lb_group: { lb_nhop.apply(); }
+                set_lb_group: {
+                    // Set out put lb link
+                    bit<8> w0;
+                    lb_weights.read(w0, 0);
+                    if (meta.bucket < (bit<16>) w0) {
+                        meta.link = 0;
+                    } else {
+                        meta.link = 1;
+                    }
+
+                    // Set output Port
+                    lb_nhop.apply();
+                }
             }
         } else {
             drop();

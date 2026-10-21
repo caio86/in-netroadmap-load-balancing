@@ -4,7 +4,7 @@ IPV4_LPM = "MyIngress.ipv4_lpm"
 SET_NHOP = "MyIngress.set_nhop"
 SET_LB_GROUP = "MyIngress.set_lb_group"
 LB_NHOP = "MyIngress.lb_nhop"
-LB_THRESHOLD = "MyIngress.lb_threshold"
+LB_WEIGHTS = "MyIngress.lb_weights"
 BUCKET_COUNTER = "MyIngress.bucket_pkts"
 SEND_FRAME = "MyEgress.send_frame"
 REWRITE_MAC = "MyEgress.rewrite_mac"
@@ -14,11 +14,9 @@ LB_GROUPS = {
     "s1": [
         {
             "prefix": "10.0.2.0/24",
-            "n_buckets": 32,
-            "initial_threshold": 16,
-            "links": [
-                (2, mac_of("s2", 1)),
-                (3, mac_of("s3", 1)),
+            "links": [  # port, nhop_mac, lb_weight
+                (2, mac_of("s2", 1), 16),
+                (3, mac_of("s3", 1), 16),
             ],
         },
     ]
@@ -65,16 +63,14 @@ def lb_commands(sw):
     cmds = []
     for group_cfg in cfg:
         prefix = group_cfg["prefix"]
-        n_buckets = group_cfg["n_buckets"]
-        initial_threshold = group_cfg["initial_threshold"]
         links = group_cfg["links"]
+        n_buckets = sum(link[2] for link in links)
 
         cmds.append(f"table_add {IPV4_LPM} {SET_LB_GROUP} {prefix} => {n_buckets}")
 
-        for link, (port, nhop_mac) in enumerate(links):
+        for link, (port, nhop_mac, weight) in enumerate(links):
             cmds.append(f"table_add {LB_NHOP} {SET_NHOP} {link} => {nhop_mac} {port}")
-
-        cmds.append(f"register_write {LB_THRESHOLD} 0 {initial_threshold}")
+            cmds.append(f"register_write {LB_WEIGHTS} {link} {weight}")
     return cmds
 
 

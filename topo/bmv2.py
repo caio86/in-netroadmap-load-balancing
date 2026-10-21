@@ -10,7 +10,7 @@ from mininet.log import error, info
 from mininet.node import Switch
 
 from .config import SWITCHES, thrift_port
-from .tables import LB_THRESHOLD, table_commands
+from .tables import table_commands
 
 
 def cli_exe():
@@ -55,8 +55,6 @@ def read_counters(sw, counter, n):
     return [cells[i] for i in range(n)]
 
 
-def set_threshold(sw, value):
-    run_cli(sw, [f"register_write {LB_THRESHOLD} 0 {value}"])
 def set_queue_limits(sw, port, rate_pps, queue_depth):
     run_cli(
         sw,
