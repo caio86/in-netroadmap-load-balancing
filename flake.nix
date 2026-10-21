@@ -12,7 +12,17 @@
         "x86_64-darwin"
         "aarch64-darwin"
       ];
-      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      forAllSystems =
+        f:
+        nixpkgs.lib.genAttrs systems (
+          system:
+          f (
+            import nixpkgs {
+              inherit system;
+              config.allowUnfree = true;
+            }
+          )
+        );
     in
     {
       devShells = forAllSystems (
@@ -25,6 +35,7 @@
           ];
 
           tools = with pkgs; [
+            vagrant
             basedpyright
             ruff
           ];
