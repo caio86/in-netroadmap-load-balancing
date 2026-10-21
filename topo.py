@@ -38,7 +38,7 @@ def main():
     from mininet.cli import CLI
     from mininet.log import setLogLevel
 
-    from topo.bmv2 import P4Switch, load_tables
+    from topo.bmv2 import P4Switch, load_tables, set_queue_limits
     from topo.network import build, configure_hosts, prepare_nodes
 
     setLogLevel("warning")
@@ -48,7 +48,9 @@ def main():
     try:
         configure_hosts(net)
         prepare_nodes(net)
-        load_tables(net)
+        load_tables()
+        set_queue_limits("s1", 2, rate_pps=800, queue_depth=64)
+        set_queue_limits("s1", 3, rate_pps=2400, queue_depth=64)
         setLogLevel("info")
         CLI(net)
     finally:

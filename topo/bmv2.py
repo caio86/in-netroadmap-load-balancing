@@ -31,7 +31,7 @@ def run_cli(sw, commands):
     return p.stdout
 
 
-def load_tables(net):
+def load_tables():
     for sw in SWITCHES:
         out = run_cli(sw, table_commands(sw))
         # simple_switch_CLI keeps going after a bad command, so show its complaints
@@ -57,6 +57,14 @@ def read_counters(sw, counter, n):
 
 def set_threshold(sw, value):
     run_cli(sw, [f"register_write {LB_THRESHOLD} 0 {value}"])
+def set_queue_limits(sw, port, rate_pps, queue_depth):
+    run_cli(
+        sw,
+        [
+            f"set_queue_rate {rate_pps} {port}",
+            f"set_queue_depth {queue_depth} {port}",
+        ],
+    )
 
 
 def reset_counter(sw, counter):
