@@ -1,6 +1,14 @@
 #include <core.p4>
 #include <v1model.p4>
 
+const bit<32> LINK_STATE1 = 16;
+const bit<32> LINK_STATE2 = 32;
+const bit<32> LINK_STATE3 = 48;
+
+const bit<32> COST1 = 1;
+const bit<32> COST2 = 4;
+const bit<32> COST3 = 6;
+
 const bit<16> TYPE_IPV4 = 0x0800;
 const bit<8>  PROTO_TCP = 6;
 const bit<8>  PROTO_UDP = 17;
@@ -47,6 +55,8 @@ struct metadata {
     bit<16> link;
 }
 
+register<bit<32>>(4) qdepth;
+
 /* ------------------------------------------------------------------ parser */
 parser MyParser(packet_in packet,
                 out headers hdr,
@@ -85,8 +95,12 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
+    register<bit<32>>(1) last_state;
+    register<bit<32>>(1) last_action;
     register<bit<8>>(4) lb_weights;
+    register<bit<32>>(256) q_table;
     counter(32, CounterType.packets) bucket_pkts;
+    counter(32, CounterType.packets) link_pkts;
 
     action drop() {
         mark_to_drop(standard_metadata);
@@ -133,9 +147,100 @@ control MyIngress(inout headers hdr,
 
     apply {
         if (hdr.ipv4.isValid() && hdr.ipv4.ttl > 1) {
+            // Executar apartir daqui só se qlearning estiver ativado no switch
+            // desativar para s2, s3, s4
+
+            // 1. Capturar o estado atual
+            // Onde qN é a queue do link N
+            bit<32> q0;
+            bit<32> q1;
+            qdepth.read(q0, 2);
+            qdepth.read(q1, 3);
+
+            // Onde sN é a categoria do estado da queue do link N
+            // Vai de 0 a 3
+            // Dá pra mudar para uma MAT?
+            bit<32> s0 = 0;
+            if (q0 < LINK_STATE1) s0 = 0;
+            else if (q0 < LINK_STATE2) s0 = 1;
+            else if (q0 < LINK_STATE3) s0 = 2;
+            else s0 = 3;
+
+            bit<32> s1 = 0;
+            if (q1 < LINK_STATE1) s1 = 0;
+            else if (q1 < LINK_STATE2) s1 = 1;
+            else if (q1 < LINK_STATE3) s1 = 2;
+            else s1 = 3;
+
+            // Tamanho dessas V variaveis devem mudar com a quantidade de links de saida
+            bit<32> state = (s0 << 2) | s1;
+            bit<32> q_idx = state << 2;
+
+            // 2 Calcular o custo
+            bit<32> cost = 0;
+            if (s0 == 1) { cost = cost + COST1; } else { if (s0 == 2) { cost = cost + COST2 ; } else { if (s0 == 3) { cost = cost + COST3 ; }}}
+            if (s1 == 1) { cost = cost + COST1; } else { if (s1 == 2) { cost = cost + COST2 ; } else { if (s1 == 3) { cost = cost + COST3 ; }}}
+
+            // 3. Escolhendo melhor ação
+            bit<32> ma; // Melhor ação
+            bit<32> acao = 0; // Indice ação | Começando com fazer nada
+            bit<32> qa; // Q-value da ação
+            q_table.read(ma, q_idx); // fazer nada
+            q_table.read(qa, q_idx | 1); if (qa <= ma) { ma = qa; acao = 1; } // Mover de 0 para 1
+            q_table.read(qa, q_idx | 2); if (qa <= ma) { ma = qa; acao = 2; } // Mover de 1 para 0
+
+            // 4. Atualizar tabela
+            // Aplicar parametros depois: DISCOUNT, LEARNING_RATE
+
+            bit<32> tgt = cost + ma;
+
+            bit<32> ls;
+            last_state.read(ls, 0);
+            bit<32> la;
+            last_action.read(la, 0);
+
+            bit<32> last_q_idx = ( ls << 2 ) | la;
+
+            // Salvar resultado na tabela
+            q_table.write(last_q_idx, tgt);
+
+
+            // 5.1 Realizar ação
+
+            // Provavelmente vira uma MAT
+            bit<32> wi_index;
+            bit<32> wj_index;
+            if (acao == 1) {
+                wi_index = 0;
+                wj_index = 1;
+            } else {
+                wi_index = 1;
+                wj_index = 0;
+            }
+
+            // 5.2 Atualizar pesos de acordo com a ação
+            if (acao != 0) {
+                bit<8> wi;
+                bit<8> wj;
+                lb_weights.read(wi, wi_index);
+                if (wi > 1) { // 1 Sendo o valor minimo de cada peso
+                    lb_weights.read(wj, wj_index);
+                    lb_weights.write(wi_index, wi - 1);
+                    lb_weights.write(wj_index, wj + 1);
+                }
+            }
+
+            // 5.3 Pos execução
+            last_state.write(0, state);
+            last_action.write(0, acao);
+
+            // 5.4 Modificar parametros
+            // 5.5 Registrar logs
+
+            // 6. Encaminhamento
             switch(ipv4_lpm.apply().action_run) {
                 set_lb_group: {
-                    // Set out put lb link
+                    // 5.1 Set out put lb link
                     bit<8> w0;
                     lb_weights.read(w0, 0);
                     if (meta.bucket < (bit<16>) w0) {
@@ -143,8 +248,9 @@ control MyIngress(inout headers hdr,
                     } else {
                         meta.link = 1;
                     }
+                    link_pkts.count((bit<32>) meta.link);
 
-                    // Set output Port
+                    // 5.2 Set output Port
                     lb_nhop.apply();
                 }
             }
@@ -180,6 +286,11 @@ control MyEgress(inout headers hdr,
         if (hdr.ipv4.isValid()) {
             send_frame.apply();
             tx_per_port.count((bit<32>) standard_metadata.egress_port);
+
+            bit<32> q;
+            qdepth.read(q, (bit<32>) standard_metadata.egress_port);
+            q = q - (q >> 2) + ((bit<32>) standard_metadata.deq_qdepth >> 2);
+            qdepth.write((bit<32>) standard_metadata.egress_port, q);
         }
     }
 }
