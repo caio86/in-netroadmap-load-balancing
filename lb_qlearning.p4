@@ -95,6 +95,8 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
+    register<bit<32>>(1) last_time;
+    register<bit<1>>(1) valid_learning;
     register<bit<32>>(1) last_state;
     register<bit<32>>(1) last_action;
     register<bit<8>>(4) lb_weights;
@@ -150,92 +152,111 @@ control MyIngress(inout headers hdr,
             // Executar apartir daqui só se qlearning estiver ativado no switch
             // desativar para s2, s3, s4
 
-            // 1. Capturar o estado atual
-            // Onde qN é a queue do link N
-            bit<32> q0;
-            bit<32> q1;
-            qdepth.read(q0, 2);
-            qdepth.read(q1, 3);
+            // 2^17 us ~= 130ms
+            bit<32> current_time = ((bit<32>) standard_metadata.ingress_global_timestamp >> 17);
+            bit<32> time;
+            last_time.read(time, 0);
 
-            // Onde sN é a categoria do estado da queue do link N
-            // Vai de 0 a 3
-            // Dá pra mudar para uma MAT?
-            bit<32> s0 = 0;
-            if (q0 < LINK_STATE1) s0 = 0;
-            else if (q0 < LINK_STATE2) s0 = 1;
-            else if (q0 < LINK_STATE3) s0 = 2;
-            else s0 = 3;
+            if (current_time != time) {
+                last_time.write(0, current_time);
+                // 1. Capturar o estado atual
+                // Onde qN é a queue do link N
+                bit<32> q0;
+                bit<32> q1;
+                qdepth.read(q0, 2);
+                qdepth.read(q1, 3);
 
-            bit<32> s1 = 0;
-            if (q1 < LINK_STATE1) s1 = 0;
-            else if (q1 < LINK_STATE2) s1 = 1;
-            else if (q1 < LINK_STATE3) s1 = 2;
-            else s1 = 3;
+                // Onde sN é a categoria do estado da queue do link N
+                // Vai de 0 a 3
+                // Dá pra mudar para uma MAT?
+                bit<32> s0 = 0;
+                if (q0 < LINK_STATE1) s0 = 0;
+                else if (q0 < LINK_STATE2) s0 = 1;
+                else if (q0 < LINK_STATE3) s0 = 2;
+                else s0 = 3;
 
-            // Tamanho dessas V variaveis devem mudar com a quantidade de links de saida
-            bit<32> state = (s0 << 2) | s1;
-            bit<32> q_idx = state << 2;
+                bit<32> s1 = 0;
+                if (q1 < LINK_STATE1) s1 = 0;
+                else if (q1 < LINK_STATE2) s1 = 1;
+                else if (q1 < LINK_STATE3) s1 = 2;
+                else s1 = 3;
 
-            // 2 Calcular o custo
-            bit<32> cost = 0;
-            if (s0 == 1) { cost = cost + COST1; } else { if (s0 == 2) { cost = cost + COST2 ; } else { if (s0 == 3) { cost = cost + COST3 ; }}}
-            if (s1 == 1) { cost = cost + COST1; } else { if (s1 == 2) { cost = cost + COST2 ; } else { if (s1 == 3) { cost = cost + COST3 ; }}}
+                // Tamanho dessas V variaveis devem mudar com a quantidade de links de saida
+                bit<32> state = (s0 << 2) | s1;
+                bit<32> q_idx = state << 2;
 
-            // 3. Escolhendo melhor ação
-            bit<32> ma; // Melhor ação
-            bit<32> acao = 0; // Indice ação | Começando com fazer nada
-            bit<32> qa; // Q-value da ação
-            q_table.read(ma, q_idx); // fazer nada
-            q_table.read(qa, q_idx | 1); if (qa <= ma) { ma = qa; acao = 1; } // Mover de 0 para 1
-            q_table.read(qa, q_idx | 2); if (qa <= ma) { ma = qa; acao = 2; } // Mover de 1 para 0
+                // 2 Calcular o custo
+                bit<32> cost = 0;
+                if (s0 == 1) { cost = cost + COST1; } else { if (s0 == 2) { cost = cost + COST2 ; } else { if (s0 == 3) { cost = cost + COST3 ; }}}
+                if (s1 == 1) { cost = cost + COST1; } else { if (s1 == 2) { cost = cost + COST2 ; } else { if (s1 == 3) { cost = cost + COST3 ; }}}
 
-            // 4. Atualizar tabela
-            // Aplicar parametros depois: DISCOUNT, LEARNING_RATE
+                // 3. Escolhendo melhor ação
+                bit<32> ma; // Melhor ação
+                bit<32> acao = 0; // Indice ação | Começando com fazer nada
+                bit<32> qa; // Q-value da ação
+                q_table.read(ma, q_idx); // fazer nada
+                q_table.read(qa, q_idx | 1); if (qa < ma) { ma = qa; acao = 1; } // Mover de 0 para 1
+                q_table.read(qa, q_idx | 2); if (qa < ma) { ma = qa; acao = 2; } // Mover de 1 para 0
 
-            bit<32> tgt = cost + ma;
+                // 4. Atualizar tabela
+                // Aplicar parametros depois: DISCOUNT, LEARNING_RATE
 
-            bit<32> ls;
-            last_state.read(ls, 0);
-            bit<32> la;
-            last_action.read(la, 0);
+                bit<1> valid;
+                valid_learning.read(valid, 0);
+                if (valid == 1) {
+                    bit<32> ls;
+                    last_state.read(ls, 0);
+                    bit<32> la;
+                    last_action.read(la, 0);
+                    bit<32> last_q_idx = ( ls << 2 ) | la;
 
-            bit<32> last_q_idx = ( ls << 2 ) | la;
+                    bit<32> tgt = cost + ma;
 
-            // Salvar resultado na tabela
-            q_table.write(last_q_idx, tgt);
+                    bit<32> old_q;
+                    q_table.read(old_q, last_q_idx);
 
+                    bit<32> td_err = tgt - old_q;
 
-            // 5.1 Realizar ação
+                    bit<32> new_q = (old_q + ( td_err >> 4));
 
-            // Provavelmente vira uma MAT
-            bit<32> wi_index;
-            bit<32> wj_index;
-            if (acao == 1) {
-                wi_index = 0;
-                wj_index = 1;
-            } else {
-                wi_index = 1;
-                wj_index = 0;
-            }
-
-            // 5.2 Atualizar pesos de acordo com a ação
-            if (acao != 0) {
-                bit<8> wi;
-                bit<8> wj;
-                lb_weights.read(wi, wi_index);
-                if (wi > 1) { // 1 Sendo o valor minimo de cada peso
-                    lb_weights.read(wj, wj_index);
-                    lb_weights.write(wi_index, wi - 1);
-                    lb_weights.write(wj_index, wj + 1);
+                    // Salvar resultado na tabela
+                    q_table.write(last_q_idx, new_q);
                 }
+
+
+                // 5.1 Realizar ação
+
+                // Provavelmente vira uma MAT
+                bit<32> wi_index;
+                bit<32> wj_index;
+                if (acao == 1) {
+                    wi_index = 0;
+                    wj_index = 1;
+                } else {
+                    wi_index = 1;
+                    wj_index = 0;
+                }
+
+                // 5.2 Atualizar pesos de acordo com a ação
+                if (acao != 0) {
+                    bit<8> wi;
+                    bit<8> wj;
+                    lb_weights.read(wi, wi_index);
+                    if (wi > 1) { // 1 Sendo o valor minimo de cada peso
+                        lb_weights.read(wj, wj_index);
+                        lb_weights.write(wi_index, wi - 1);
+                        lb_weights.write(wj_index, wj + 1);
+                    }
+                }
+
+                // 5.3 Pos execução
+                last_state.write(0, state);
+                last_action.write(0, acao);
+                valid_learning.write(0, 1);
+
+                // 5.4 Modificar parametros
+                // 5.5 Registrar logs
             }
-
-            // 5.3 Pos execução
-            last_state.write(0, state);
-            last_action.write(0, acao);
-
-            // 5.4 Modificar parametros
-            // 5.5 Registrar logs
 
             // 6. Encaminhamento
             switch(ipv4_lpm.apply().action_run) {
