@@ -290,8 +290,10 @@ control MyIngress(inout headers hdr,
                 iterations.write(0, iter);
 
                 dbg.write(0, state);
-                dbg.write(1, cost);
-                dbg.write(2, ma);
+                bit<32> cc = 0;
+                dbg.read(cc, 1);
+                dbg.write(1, cc + cost);
+                dbg.write(2, acao);
                 dbg.write(3, iter);
             }
 
