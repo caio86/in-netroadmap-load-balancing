@@ -7,7 +7,7 @@ const bit<32> LINK_STATE3 = 48;
 
 const bit<32> COST1 = 1;
 const bit<32> COST2 = 4;
-const bit<32> COST3 = 6;
+const bit<32> COST3 = 7;
 
 const bit<16> TYPE_IPV4 = 0x0800;
 const bit<8>  PROTO_TCP = 6;
@@ -95,12 +95,14 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
-    register<bit<32>>(1) last_time;
-    register<bit<1>>(1) valid_learning;
-    register<bit<32>>(1) last_state;
-    register<bit<32>>(1) last_action;
-    register<bit<8>>(4) lb_weights;
-    register<bit<32>>(256) q_table;
+    register<bit<32>>(1)    last_time;
+    register<bit<1>>(1)     valid_learning;
+    register<bit<32>>(1)    iterations;
+    register<bit<32>>(1)    last_state;
+    register<bit<32>>(1)    last_action;
+    register<bit<8>>(4)     lb_weights;
+    register<bit<32>>(256)  q_table;
+    register<bit<32>>(4)    dbg;
     counter(32, CounterType.packets) bucket_pkts;
     counter(32, CounterType.packets) link_pkts;
 
@@ -153,7 +155,7 @@ control MyIngress(inout headers hdr,
             // desativar para s2, s3, s4
 
             // 2^17 us ~= 130ms
-            bit<32> current_time = ((bit<32>) standard_metadata.ingress_global_timestamp >> 17);
+            bit<32> current_time = (bit<32>) (standard_metadata.ingress_global_timestamp >> 17);
             bit<32> time;
             last_time.read(time, 0);
 
@@ -210,14 +212,37 @@ control MyIngress(inout headers hdr,
                     last_action.read(la, 0);
                     bit<32> last_q_idx = ( ls << 2 ) | la;
 
-                    bit<32> tgt = cost + ma;
+                    // Custo é em inteiro
+                    bit<32> cost_scaled = cost << 8;
+
+                    bit<32> discounted_future = (bit<32>) ((((bit<64>) 230 * (bit<64>) ma)) >> 8);
+
+                    bit<32> tgt = cost_scaled + discounted_future;
 
                     bit<32> old_q;
                     q_table.read(old_q, last_q_idx);
 
-                    bit<32> td_err = tgt - old_q;
+                    bit<32> td_err;
+                    bit<32> delta;
+                    bit<32> new_q;
+                    bit<32> step;
+                    bit<64> product;
 
-                    bit<32> new_q = (old_q + ( td_err >> 4));
+                    if (tgt >= old_q) {
+                        delta = tgt - old_q;
+
+                        product = (bit<64>) 64 * (bit<64>) delta;
+
+                        step = (bit<32>) (product >> 8);
+                        new_q = old_q + step;
+                    } else {
+                        delta = old_q - tgt;
+
+                        product = (bit<64>) 64 * (bit<64>) delta;
+
+                        step = (bit<32>) (product >> 8);
+                        new_q = old_q - step;
+                    }
 
                     // Salvar resultado na tabela
                     q_table.write(last_q_idx, new_q);
@@ -256,6 +281,16 @@ control MyIngress(inout headers hdr,
 
                 // 5.4 Modificar parametros
                 // 5.5 Registrar logs
+
+                bit<32> iter;
+                iterations.read(iter, 0);
+                iter = iter + 1;
+                iterations.write(0, iter);
+
+                dbg.write(0, state);
+                dbg.write(1, cost);
+                dbg.write(2, ma);
+                dbg.write(3, iter);
             }
 
             // 6. Encaminhamento

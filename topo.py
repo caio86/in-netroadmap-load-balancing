@@ -4,6 +4,7 @@ from argparse import ArgumentParser
 def parse_args():
     ap = ArgumentParser()
     ap.add_argument("--json", help="compiled p4 program")
+    ap.add_argument("--collect", metavar="CSV", help="Collect s1 metrics to a csv file")
     ap.add_argument(
         "--print-commands",
         action="store_true",
@@ -39,6 +40,7 @@ def main():
     from mininet.log import setLogLevel
 
     from topo.bmv2 import P4Switch, load_tables, set_queue_limits
+    from topo.collector import Collector
     from topo.network import build, configure_hosts, prepare_nodes
 
     setLogLevel("warning")
@@ -49,10 +51,14 @@ def main():
         configure_hosts(net)
         prepare_nodes(net)
         load_tables()
-        set_queue_limits("s1", 2, rate_pps=800, queue_depth=64)
-        set_queue_limits("s1", 3, rate_pps=2400, queue_depth=64)
+        set_queue_limits("s1", 2, rate_pps=100, queue_depth=64)
+        set_queue_limits("s1", 3, rate_pps=300, queue_depth=64)
         setLogLevel("info")
-        CLI(net)
+        if args.collect:
+            with Collector(args.collect):
+                CLI(net)
+        else:
+            CLI(net)
     finally:
         net.stop()
 

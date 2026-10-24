@@ -3,6 +3,7 @@
 Vagrant.configure("2") do |config|
   config.vm.box = "p4-ubuntu2204"
   config.vm.hostname = "p4"
+  config.ssh.forward_x11 = true
 
   config.vm.provider "virtualbox" do |vb|
     vb.cpus = 4

@@ -7,6 +7,8 @@ dist/
 .pytest_cache/
 build/
 
+logs/
+
 # Created by https://www.toptal.com/developers/gitignore/api/python,vagrant
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,vagrant
 
