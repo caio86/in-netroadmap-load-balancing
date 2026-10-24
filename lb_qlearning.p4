@@ -102,6 +102,7 @@ control MyIngress(inout headers hdr,
     register<bit<32>>(1)    last_state;
     register<bit<32>>(1)    last_action;
     register<bit<8>>(4)     lb_weights;
+    register<bit<16>>(1)    total_buckets;
     register<bit<32>>(256)  q_table;
     register<bit<32>>(4)    dbg;
     counter(32, CounterType.packets) bucket_pkts;
@@ -117,8 +118,10 @@ control MyIngress(inout headers hdr,
         hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
     }
 
-    action set_lb_group(bit<16> count) {
+    action set_lb_group() {
         // Set flow bucket
+        bit<16> n_buckets;
+        total_buckets.read(n_buckets, 0);
         hash(
             meta.bucket,
             HashAlgorithm.crc32,
@@ -130,7 +133,7 @@ control MyIngress(inout headers hdr,
                 hdr.l4.srcPort,
                 hdr.l4.dstPort,
             },
-            count
+            n_buckets
         );
         bucket_pkts.count((bit<32>) meta.bucket);
     }

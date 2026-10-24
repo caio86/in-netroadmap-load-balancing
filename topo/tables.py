@@ -7,6 +7,7 @@ LB_NHOP = "MyIngress.lb_nhop"
 LB_WEIGHTS = "MyIngress.lb_weights"
 BUCKET_COUNTER = "MyIngress.bucket_pkts"
 LINK_COUNTER = "MyIngress.link_pkts"
+N_BUCKETS = "MyIngress.total_buckets"
 DEBUG_REGISTER = "MyIngress.dbg"
 SEND_FRAME = "MyEgress.send_frame"
 REWRITE_MAC = "MyEgress.rewrite_mac"
@@ -80,13 +81,15 @@ def lb_commands(sw):
     for group_cfg in cfg:
         prefix = group_cfg["prefix"]
         links = group_cfg["links"]
-        n_buckets = sum(link[2] for link in links)
+        n_buckets = 0
 
-        cmds.append(f"table_add {IPV4_LPM} {SET_LB_GROUP} {prefix} => {n_buckets}")
+        cmds.append(f"table_add {IPV4_LPM} {SET_LB_GROUP} {prefix} =>")
 
         for link, (port, nhop_mac, weight) in enumerate(links):
             cmds.append(f"table_add {LB_NHOP} {SET_NHOP} {link} => {nhop_mac} {port}")
             cmds.append(f"register_write {LB_WEIGHTS} {link} {weight}")
+            n_buckets += weight
+        cmds.append(f"register_write {N_BUCKETS} 0 {n_buckets}")
     return cmds
 
 
