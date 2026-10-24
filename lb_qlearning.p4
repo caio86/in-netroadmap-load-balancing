@@ -1,9 +1,9 @@
 #include <core.p4>
 #include <v1model.p4>
 
-const bit<32> LINK_STATE1 = 16;
-const bit<32> LINK_STATE2 = 32;
-const bit<32> LINK_STATE3 = 48;
+const bit<16> LINK_STATE1 = 16;
+const bit<16> LINK_STATE2 = 32;
+const bit<16> LINK_STATE3 = 48;
 
 const bit<32> COST1 = 1;
 const bit<32> COST2 = 4;
@@ -52,10 +52,11 @@ struct headers {
 
 struct metadata {
     bit<16> bucket;
-    bit<16> link;
+    bit<8> link;
+    bit<1> balanced;
 }
 
-register<bit<32>>(4) qdepth;
+register<bit<16>>(4) qdepth;
 
 /* ------------------------------------------------------------------ parser */
 parser MyParser(packet_in packet,
@@ -120,7 +121,7 @@ control MyIngress(inout headers hdr,
         // Set flow bucket
         hash(
             meta.bucket,
-            HashAlgorithm.crc16,
+            HashAlgorithm.crc32,
             16w0,
             {
                 hdr.ipv4.srcAddr,
@@ -150,6 +151,7 @@ control MyIngress(inout headers hdr,
 
 
     apply {
+        meta.balanced = 0;
         if (hdr.ipv4.isValid() && hdr.ipv4.ttl > 1) {
             // Executar apartir daqui só se qlearning estiver ativado no switch
             // desativar para s2, s3, s4
@@ -163,10 +165,10 @@ control MyIngress(inout headers hdr,
                 last_time.write(0, current_time);
                 // 1. Capturar o estado atual
                 // Onde qN é a queue do link N
-                bit<32> q0;
-                bit<32> q1;
-                qdepth.read(q0, 2);
-                qdepth.read(q1, 3);
+                bit<16> q0;
+                bit<16> q1;
+                qdepth.read(q0, 0);
+                qdepth.read(q1, 1);
 
                 // Onde sN é a categoria do estado da queue do link N
                 // Vai de 0 a 3
@@ -305,6 +307,8 @@ control MyIngress(inout headers hdr,
                         meta.link = 1;
                     }
                     link_pkts.count((bit<32>) meta.link);
+                    meta.balanced = 1;
+
 
                     // 5.2 Set output Port
                     lb_nhop.apply();
@@ -343,10 +347,13 @@ control MyEgress(inout headers hdr,
             send_frame.apply();
             tx_per_port.count((bit<32>) standard_metadata.egress_port);
 
-            bit<32> q;
-            qdepth.read(q, (bit<32>) standard_metadata.egress_port);
-            q = q - (q >> 2) + ((bit<32>) standard_metadata.deq_qdepth >> 2);
-            qdepth.write((bit<32>) standard_metadata.egress_port, q);
+            if (meta.balanced == 1) {
+                bit<16> q;
+                bit<16> sample_qdepth = (bit<16>) standard_metadata.deq_qdepth;
+                qdepth.read(q, (bit<32>) meta.link);
+                q = q - (q >> 2) + (sample_qdepth >> 2);
+                qdepth.write((bit<32>) meta.link, q);
+            }
         }
     }
 }
