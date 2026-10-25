@@ -13,6 +13,9 @@ const bit<16> TYPE_IPV4 = 0x0800;
 const bit<8>  PROTO_TCP = 6;
 const bit<8>  PROTO_UDP = 17;
 
+const bit<8> GAMMA_SHIFT = 4; // discount
+const bit<8> ALPHA_SHIFT = 3;
+
 typedef bit<9>  egressSpec_t;
 typedef bit<48> macAddr_t;
 typedef bit<32> ip4Addr_t;
@@ -100,7 +103,9 @@ control MyIngress(inout headers hdr,
     register<bit<1>>(1)     valid_learning;
     register<bit<32>>(1)    iterations;
     register<bit<32>>(1)    last_state;
-    register<bit<32>>(1)    last_action;
+    register<bit<8>>(1)     last_action;
+    register<bit<1>>(1)     last_moved;
+    register<bit<8>>(1)     alpha_shift;
     register<bit<8>>(4)     lb_weights;
     register<bit<16>>(1)    total_buckets;
     register<bit<32>>(256)  q_table;
@@ -200,21 +205,26 @@ control MyIngress(inout headers hdr,
                         else s1 = 3;
 
                         // Tamanho dessas V variaveis devem mudar com a quantidade de links de saida
-                        bit<32> state = (s0 << 2) | s1;
-                        bit<32> q_idx = state << 2;
+                        bit<32> state = s0 + (s1 << 2);
 
                         // 2 Calcular o custo
                         bit<32> cost = 0;
                         if (s0 == 1) { cost = cost + COST1; } else { if (s0 == 2) { cost = cost + COST2 ; } else { if (s0 == 3) { cost = cost + COST3 ; }}}
                         if (s1 == 1) { cost = cost + COST1; } else { if (s1 == 2) { cost = cost + COST2 ; } else { if (s1 == 3) { cost = cost + COST3 ; }}}
+                        bit<1> prev_moved;
+                        last_moved.read(prev_moved, 0);
+                        if (prev_moved == 1) {
+                            cost = cost + 1;
+                        }
 
                         // 3. Escolhendo melhor ação
-                        bit<32> ma; // Melhor ação
-                        bit<32> acao = 0; // Indice ação | Começando com fazer nada
+                        bit<32> base = ((bit<32>) state) << 2;
+                        bit<32> best = 0x7FFFFFFF;
+                        bit<8> best_action = 0;
                         bit<32> qa; // Q-value da ação
-                        q_table.read(ma, q_idx); // fazer nada
-                        q_table.read(qa, q_idx | 1); if (qa < ma) { ma = qa; acao = 1; } // Mover de 0 para 1
-                        q_table.read(qa, q_idx | 2); if (qa < ma) { ma = qa; acao = 2; } // Mover de 1 para 0
+                        q_table.read(qa, base | 0); if (qa < best) { best = qa; best_action = 0; } // fazer nada
+                        q_table.read(qa, base | 1); if (qa < best) { best = qa; best_action = 1; } // Mover de 0 para 1
+                        q_table.read(qa, base | 2); if (qa < best) { best = qa; best_action = 2; } // Mover de 1 para 0
 
                         // 4. Atualizar tabela
                         // Aplicar parametros depois: DISCOUNT, LEARNING_RATE
@@ -223,63 +233,56 @@ control MyIngress(inout headers hdr,
                         valid_learning.read(valid, 0);
                         if (valid == 1) {
                             bit<32> ls;
+                            bit<8> la;
                             last_state.read(ls, 0);
-                            bit<32> la;
                             last_action.read(la, 0);
-                            bit<32> last_q_idx = ( ls << 2 ) | la;
+                            bit<32> idx = ( ls << 2 ) | (bit<32>) la;
+                            bit<32> old;
+                            q_table.read(old, idx);
 
-                            // Custo é em inteiro
-                            bit<32> cost_scaled = cost << 8;
-
-                            bit<32> discounted_future = (bit<32>) ((((bit<64>) 230 * (bit<64>) ma)) >> 8);
-
-                            bit<32> tgt = cost_scaled + discounted_future;
-
-                            bit<32> old_q;
-                            q_table.read(old_q, last_q_idx);
+                            bit<32> target = (cost << 8) + best - (best >> GAMMA_SHIFT);
 
                             bit<32> td_err;
-                            bit<32> delta;
                             bit<32> new_q;
-                            bit<32> step;
-                            bit<64> product;
+                            bit<32> one = 1;
+                            bit<8> shift = ALPHA_SHIFT;
+                            // alpha_shift.read(shift, 0);
 
-                            if (tgt >= old_q) {
-                                delta = tgt - old_q;
-
-                                product = (bit<64>) 64 * (bit<64>) delta;
-
-                                step = (bit<32>) (product >> 8);
-                                new_q = old_q + step;
+                            if (target >= old) {
+                                td_err = target - old;
+                                new_q = old + ( td_err >> shift);
                             } else {
-                                delta = old_q - tgt;
-
-                                product = (bit<64>) 64 * (bit<64>) delta;
-
-                                step = (bit<32>) (product >> 8);
-                                new_q = old_q - step;
+                                bit<32> gap = old - target;
+                                td_err = gap + (one << shift) - 1;
+                                new_q = old - ( td_err >> shift);
                             }
 
                             // Salvar resultado na tabela
-                            q_table.write(last_q_idx, new_q);
+                            q_table.write(idx, new_q);
                         }
 
+                        bit<8> action_idx;
+                        random(action_idx, 0, 2);
 
                         // 5.1 Realizar ação
 
+                        bit<1> mv = 0;
                         // Provavelmente vira uma MAT
-                        bit<32> wi_index;
-                        bit<32> wj_index;
-                        if (acao == 1) {
+                        bit<32> wi_index = 0;
+                        bit<32> wj_index = 0;
+                        if (action_idx == 1) {
                             wi_index = 0;
                             wj_index = 1;
-                        } else {
+                            mv = 1;
+                        } else if (action_idx == 2) {
                             wi_index = 1;
                             wj_index = 0;
+                            mv = 1;
                         }
 
                         // 5.2 Atualizar pesos de acordo com a ação
-                        if (acao != 0) {
+                        bit<1> moved = 0;
+                        if (mv == 1) {
                             bit<8> wi;
                             bit<8> wj;
                             lb_weights.read(wi, wi_index);
@@ -287,12 +290,14 @@ control MyIngress(inout headers hdr,
                                 lb_weights.read(wj, wj_index);
                                 lb_weights.write(wi_index, wi - 1);
                                 lb_weights.write(wj_index, wj + 1);
+                                moved = 1;
                             }
                         }
 
                         // 5.3 Pos execução
                         last_state.write(0, state);
-                        last_action.write(0, acao);
+                        last_action.write(0, action_idx);
+                        last_moved.write(0, moved);
                         valid_learning.write(0, 1);
 
                         // 5.4 Modificar parametros
@@ -307,7 +312,7 @@ control MyIngress(inout headers hdr,
                         bit<32> cc = 0;
                         dbg.read(cc, 1);
                         dbg.write(1, cc + cost);
-                        dbg.write(2, acao);
+                        dbg.write(2, (bit<32>) action_idx);
                         dbg.write(3, iter);
                     }
 
@@ -352,7 +357,7 @@ control MyEgress(inout headers hdr,
 
             if (meta.balanced == 1) {
                 bit<16> q;
-                bit<16> sample_qdepth = (bit<16>) standard_metadata.deq_qdepth;
+                bit<16> sample_qdepth = ( (bit<16>) standard_metadata.deq_qdepth << 4);
                 qdepth.read(q, (bit<32>) meta.link);
                 q = q - (q >> 2) + (sample_qdepth >> 2);
                 qdepth.write((bit<32>) meta.link, q);
