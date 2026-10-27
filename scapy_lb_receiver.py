@@ -8,6 +8,7 @@ The receiver prints an aggregate summary every --interval seconds and appends
 one CSV row per interval. One-way delay is meaningful when sender and receiver
 share a clock (typically true for Mininet hosts on one VM).
 """
+
 import argparse
 import csv
 import signal
@@ -22,11 +23,17 @@ ETH_HEADER = 14
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--port", type=int, default=9000)
     ap.add_argument("--bind", default="0.0.0.0")
-    ap.add_argument("--interval", type=float, default=2.0, help="stdout/CSV interval in seconds")
-    ap.add_argument("--csv", "--log", dest="csv_path", required=True, help="CSV output path")
+    ap.add_argument(
+        "--interval", type=float, default=2.0, help="stdout/CSV interval in seconds"
+    )
+    ap.add_argument(
+        "--csv", "--log", dest="csv_path", required=True, help="CSV output path"
+    )
     ap.add_argument("--rcvbuf", type=int, default=8 * 1024 * 1024)
     args = ap.parse_args()
     if args.interval <= 0:
@@ -38,22 +45,39 @@ def main():
     sock.settimeout(0.2)
 
     stopping = False
+
     def request_stop(*_):
         nonlocal stopping
         stopping = True
+
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
     output = Path(args.csv_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     csv_file = output.open("w", newline="", encoding="utf-8")
-    writer = csv.DictWriter(csv_file, fieldnames=[
-        "timestamp", "elapsed_s", "interval_s", "packets", "payload_bytes",
-        "l3_bytes", "l2_estimated_bytes", "throughput_l2_mbps",
-        "throughput_l3_mbps", "packet_rate_pps", "mean_delay_ms",
-        "max_delay_ms", "mean_interarrival_ms", "interarrival_jitter_ms",
-        "flows_seen", "out_of_order_packets", "duplicates",
-    ])
+    writer = csv.DictWriter(
+        csv_file,
+        fieldnames=[
+            "timestamp",
+            "elapsed_s",
+            "interval_s",
+            "packets",
+            "payload_bytes",
+            "l3_bytes",
+            "l2_estimated_bytes",
+            "throughput_l2_mbps",
+            "throughput_l3_mbps",
+            "packet_rate_pps",
+            "mean_delay_ms",
+            "max_delay_ms",
+            "mean_interarrival_ms",
+            "interarrival_jitter_ms",
+            "flows_seen",
+            "out_of_order_packets",
+            "duplicates",
+        ],
+    )
     writer.writeheader()
     csv_file.flush()
 
@@ -127,7 +151,9 @@ def main():
                 l3_mbps = interval_l3 * 8 / actual_interval / 1_000_000
                 pps = interval_packets / actual_interval
                 mean_delay = delay_sum / interval_packets if interval_packets else 0.0
-                mean_iat = interarrival_sum / interval_arrivals if interval_arrivals else 0.0
+                mean_iat = (
+                    interarrival_sum / interval_arrivals if interval_arrivals else 0.0
+                )
                 jitter = jitter_sum / jitter_count if jitter_count else 0.0
                 row = {
                     "timestamp": f"{now_wall:.3f}",
