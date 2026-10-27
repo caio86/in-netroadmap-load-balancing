@@ -12,6 +12,18 @@ DEBUG_REGISTER = "MyIngress.dbg"
 SEND_FRAME = "MyEgress.send_frame"
 REWRITE_MAC = "MyEgress.rewrite_mac"
 TX_COUNTER = "MyEgress.tx_per_port"
+AGENT_ON = "MyIngress.agent_on"
+Q_TABLE = "MyIngress.q_table"
+AGENT_TICKS = "MyIngress.agent_ticks"
+PREV_VALID = "MyIngress.valid_learning"
+PREV_MOVED = "MyIngress.last_moved"
+ALPHA_SHIFT = "MyIngress.alpha_shift"
+EPSILON = "MyIngress.epsilon"
+EPS_MIN = "MyIngress.eps_min"
+EPS_SHIFT = "MyIngress.eps_shift"
+ANNEAL1 = "MyIngress.anneal1"
+ANNEAL2 = "MyIngress.anneal2"
+AGENT_EVENTS = "MyIngress.agent_events"
 
 LB_GROUPS = {
     "s1": [
@@ -90,6 +102,50 @@ def lb_commands(sw):
             cmds.append(f"register_write {LB_WEIGHTS} {link} {weight}")
             n_buckets += weight
         cmds.append(f"register_write {N_BUCKETS} 0 {n_buckets}")
+    return cmds
+
+
+ALPHA_SHIFT_START = 3
+
+
+def agent_commands(sw):
+    if sw not in LB_GROUPS:
+        return []
+
+    cmds = []
+    cmds.append(f"register_write {ALPHA_SHIFT} 0 {ALPHA_SHIFT_START}")
+
+    cmds += [
+        f"register_write {EPSILON} 0 65535",
+        f"register_write {EPS_MIN} 0 0",
+        f"register_write {EPS_SHIFT} 0 0",
+        f"register_write {ANNEAL1} 0 0",
+        f"register_write {ANNEAL2} 0 0",
+    ]
+    return cmds
+
+
+def agent_start_commands(
+    epsilon=65535,
+    eps_shift=0,
+    eps_min=0,
+    anneal1=9000,
+    anneal2=13500,
+):
+    cmds = [
+        f"register_reset {Q_TABLE}",
+        f"counter_reset {AGENT_EVENTS}",
+        f"register_write {PREV_VALID} 0 0",
+        f"register_write {PREV_MOVED} 0 0",
+        f"register_write {AGENT_TICKS} 0 0",
+        f"register_write {ALPHA_SHIFT} 0 {ALPHA_SHIFT_START}",
+        f"register_write {EPSILON} 0 {epsilon}",
+        f"register_write {EPS_SHIFT} 0 {eps_shift}",
+        f"register_write {EPS_MIN} 0 {eps_min}",
+        f"register_write {ANNEAL1} 0 {anneal1}",
+        f"register_write {ANNEAL2} 0 {anneal2}",
+        f"register_write {AGENT_ON} 0 1",
+    ]
     return cmds
 
 

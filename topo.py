@@ -11,6 +11,11 @@ def parse_args():
         help="print table entries of every switch and exit",
     )
     ap.add_argument(
+        "--print-agent-commands",
+        action="store_true",
+        help="print table entries to enable and reset agent",
+    )
+    ap.add_argument(
         "--log-console",
         action="store_true",
         help="start the switches with --log-console (bmv2 log goes to /tmp/lb-<sw>.log)",
@@ -30,6 +35,11 @@ def print_commands():
 def main():
     ap, args = parse_args()
 
+    if args.print_agent_commands:
+        from topo.tables import agent_start_commands
+
+        print("\n".join(agent_start_commands(eps_shift=10, eps_min=1311)))
+        return
     if args.print_commands:
         print_commands()
         return
@@ -51,8 +61,8 @@ def main():
         configure_hosts(net)
         prepare_nodes(net)
         load_tables()
-        set_queue_limits("s1", 2, rate_pps=100, queue_depth=64)
-        set_queue_limits("s1", 3, rate_pps=300, queue_depth=64)
+        set_queue_limits("s1", 2, rate_pps=200, queue_depth=64)
+        set_queue_limits("s1", 3, rate_pps=400, queue_depth=64)
         setLogLevel("info")
         if args.collect:
             with Collector(args.collect):
