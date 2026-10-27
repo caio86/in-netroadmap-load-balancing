@@ -3,7 +3,7 @@ import re
 import threading
 import time
 
-from prometheus_client import Gauge, start_http_server
+from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 
 from .bmv2 import run_cli
 from .tables import SAMPLED
@@ -25,22 +25,26 @@ class Collector:
         interval=0.5,
         sw="s1",
         spec=SAMPLED,
-        prometheus_port=None,
-        prometheus_bind="0.0.0.0",
+        prometheus_addr=None,
     ) -> None:
         self.path, self.interval, self.sw, self.spec = path, interval, sw, spec
-        self.prometheus_port, self.prometheus_bind = prometheus_port, prometheus_bind
+        self.prometheus_addr = prometheus_addr
         self._commands = [
             f"{'register_read' if kind == 'register' else 'counter_read'} {name} {index}"
             for _, kind, name, index in spec
         ]
         self._stop = threading.Event()
         self._samples = 0
+
+        self._registry = CollectorRegistry()
         self._prom_gauges = {}
         for column, kind, name, index in self.spec:
             metric_name = f"bmv2_{column}".lower()
             self._prom_gauges[column] = Gauge(
-                metric_name, f"BMv2 {kind} {name}[{index}] ({column})", ["sw"]
+                metric_name,
+                f"BMv2 {kind} {name}[{index}] ({column})",
+                ["sw"],
+                registry=self._registry,
             )
 
     def __enter__(self):
@@ -51,11 +55,6 @@ class Collector:
         self.stop()
 
     def start(self):
-        if self.prometheus_port:
-            try:
-                start_http_server(self.prometheus_port, addr=self.prometheus_bind)
-            except Exception:
-                pass
         self._file = open(self.path, "w", newline="")  # noqa: SIM115
         self._writer = csv.writer(self._file)
         self._writer.writerow(["t"] + [column for column, *_ in self.spec])
@@ -82,6 +81,16 @@ class Collector:
             for (column, kind, name, index), val in zip(self.spec, row_values):
                 if val != "":
                     self._prom_gauges[column].labels(sw=self.sw).set(float(val))
+
+            if self.prometheus_addr:
+                try:
+                    push_to_gateway(
+                        self.prometheus_addr,
+                        job=f"bmv2_collector_{self.sw}",
+                        registry=self._registry,
+                    )
+                except:
+                    pass
 
             self._file.flush()
             self._samples += 1
