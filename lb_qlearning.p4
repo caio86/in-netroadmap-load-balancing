@@ -108,6 +108,9 @@ control MyIngress(inout headers hdr,
     register<bit<8>>(1)     alpha_shift;
     register<bit<8>>(4)     lb_weights;
     register<bit<16>>(1)    total_buckets;
+    register<bit<16>>(1)    epsilon;
+    register<bit<16>>(1)    eps_min;
+    register<bit<8>>(1)     eps_shift;
     register<bit<32>>(256)  q_table;
     register<bit<32>>(4)    dbg;
     counter(32, CounterType.packets) bucket_pkts;
@@ -261,8 +264,28 @@ control MyIngress(inout headers hdr,
                             q_table.write(idx, new_q);
                         }
 
+                        bit<16> x;
+                        random(x, 0, 65535);
                         bit<8> action_idx;
-                        random(action_idx, 0, 2);
+                        bit<16> eps;
+                        epsilon.read(eps, 0);
+                        if (x < eps) {
+                            random(action_idx, 0, 2);
+                        } else {
+                            action_idx = best_action;
+                        }
+
+                        bit<8>  es;
+                        bit<16> emin;
+                        eps_shift.read(es, 0);
+                        eps_min.read(emin, 0);
+                        if (es != 0 && eps > emin) {
+                            eps = eps - (eps >> es);
+                            if (eps < emin) {
+                                eps = emin;
+                            }
+                            epsilon.write(0, eps);
+                        }
 
                         // 5.1 Realizar ação
 
